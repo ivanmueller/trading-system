@@ -267,8 +267,8 @@ print("\nVolatility Estimates Comparison:")
 print(vol_table.to_string(index=False))
 
 
-# Get current stock price
-ticker = "SPY"
+
+# Get current stock price and options chain
 stock = yf.Ticker(ticker)
 current_price = stock.history(period='1d')['Close'].iloc[-1]  # Get the last closing price
 
@@ -328,7 +328,6 @@ def realized_vol(price_data, window=30):
     return log_return.rolling(window=window).std() * math.sqrt(252)  # Annualized RV
 
 # Download stock data
-ticker = "SPY"  # Change this to any stock/ETF you're analyzing
 start_date = "2023-01-30"  # 2-year historical window
 end_date = "2025-01-30"
 data = yf.download(ticker, start=start_date, end=end_date)
@@ -358,7 +357,7 @@ data['Returns'] = np.log(data['Close'] / data['Close'].shift(1))
 garch_forecast = garch_volatility(data['Returns'].dropna())
 
 # Simulated Implied Volatility (Replace with real IV if available)
-implied_vol = 0.1526  # Example: 45% IV, replace this with actual IV data
+implied_vol = straddle_iv
 
 # Plot Volatility Cone
 plt.figure(figsize=(12, 6))
