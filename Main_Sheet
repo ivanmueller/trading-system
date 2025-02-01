@@ -1,0 +1,385 @@
+import yfinance as yf
+import datetime
+import math
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from arch import arch_model
+from sklearn.metrics import mean_squared_error
+from statsmodels.stats.diagnostic import acorr_ljungbox
+import scipy.stats as stats
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+import matplotlib.pyplot as plt
+from tqdm import tqdm  # For tracking progress
+from IPython.display import display  # Use Jupyter’s default method
+
+# Function to download stock data
+def get_stock_data(ticker, start_date, end_date):
+    data = yf.download(ticker, start=start_date, end=end_date)
+
+    # Ensure necessary columns exist
+    required_cols = ['Open', 'High', 'Low', 'Close']
+    missing_cols = [col for col in required_cols if col not in data.columns]
+
+    if missing_cols:
+        raise KeyError(f"Missing required columns: {missing_cols}")
+
+    # Add returns while keeping all OHLC data
+    data['Returns'] = data['Close'].pct_change()
+    
+    return data.dropna()
+
+
+# Function to fit and evaluate volatility models
+def fit_volatility_model(returns, p, q, model_type="garch"):
+    valid_models = ["garch", "egarch"]
+    model_type = model_type.lower()
+    assert model_type in valid_models, f"Invalid model type: {model_type}. Must be one of {valid_models}"
+    
+    if model_type == "garch":
+        model = arch_model(returns, vol="Garch", p=p, q=q)
+    elif model_type == "egarch":
+        model = arch_model(returns, vol="EGarch", p=p, q=q)
+    
+    result = model.fit(disp='off')
+    return result
+
+
+def evaluate_model(result, returns, model_type, horizon=10):
+    if model_type.lower() in ["egarch"]:
+        horizon = 1  # Non-standard GARCH models typically use simulation forecasts
+
+    forecast = result.forecast(horizon=horizon, method="simulation" if model_type.lower() in ["egarch"] else "analytic")
+    predicted_variance = forecast.variance.iloc[-1, :].values
+    realized_variance = (returns[-horizon:] ** 2).values[:horizon]  # Ensure correct slicing
+
+    mse = mean_squared_error(realized_variance, predicted_variance)
+    rmse = np.sqrt(mse)
+    return result.aic, result.bic, mse, rmse 
+
+
+# Function to compute 1-day VaR
+def compute_var(result, alpha=0.05):
+    forecast = result.forecast(horizon=1)
+    variance_forecast = forecast.variance.iloc[-1, 0]
+    vol_forecast = np.sqrt(variance_forecast)
+    z_score = stats.norm.ppf(alpha)
+    return z_score * vol_forecast
+
+
+# Main execution
+if __name__ == "__main__":
+    ticker = "SPY"
+    start_date = "2019-02-01"
+    end_date = "2025-01-31"
+    data = get_stock_data(ticker, start_date, end_date)
+    returns = data['Returns'].dropna() * 100
+
+    # Define model configurations
+    model_types = ["garch", "egarch"]
+    garch_configs = [(1,1)]
+    results = {}
+    metrics = []
+
+    for model_type in model_types:
+        for p, q in garch_configs:
+            result = fit_volatility_model(returns, p, q, model_type)
+            aic, bic, mse, rmse = evaluate_model(result, returns, model_type)
+            var_95 = compute_var(result)
+            results[(model_type, p, q)] = result
+            metrics.append([f'{model_type.upper()}({p},{q})', aic, bic, mse, rmse, var_95])
+
+    # Convert metrics to DataFrame and display
+    metrics_df = pd.DataFrame(metrics, columns=['Model', 'AIC', 'BIC', 'MSE', 'RMSE', 'VaR(95%)'])
+    display(metrics_df)
+    
+    # Selecting the best model based on MSE primarily, then RMSE, then AIC/BIC
+    best_model_row = metrics_df.sort_values(by=['MSE', 'RMSE', 'AIC', 'BIC']).iloc[0]
+    best_model_key = (best_model_row['Model'].split('(')[0].lower(), 
+                      int(best_model_row['Model'].split('(')[1].split(',')[0]), 
+                      int(best_model_row['Model'].split('(')[1].split(',')[1].strip(')')))
+    
+    best_result = results[best_model_key]
+
+    # Display only the best model summary
+    print(f"\nBest Model: {best_model_row['Model']} Summary:")
+    print(best_result.summary())
+
+    # Perform additional statistical tests for the best model
+    print("\nStatistical Tests for Best Model:")
+    ljung_box = acorr_ljungbox(best_result.resid, lags=[10], return_df=True)
+    arch_test = acorr_ljungbox(best_result.resid ** 2, lags=[10], return_df=True)
+    jarque_bera_test = stats.jarque_bera(best_result.resid)
+
+    print("\nLjung-Box Test (Autocorrelation in Residuals):")
+    print(ljung_box)
+
+    print("\nEngle's ARCH Test (Heteroskedasticity):")
+    print(arch_test)
+
+    print("\nJarque-Bera Test (Normality of Residuals):")
+    print(jarque_bera_test)
+
+    # Plot autocorrelation of residuals for the best model only
+    plt.figure(figsize=(10, 5))
+    plot_acf(best_result.resid.dropna(), lags=20)
+    plt.title(f"{best_model_row['Model']} Residuals Autocorrelation")
+    plt.show()
+
+    # Forecast and plot volatility for both GARCH and EGARCH models
+    plt.figure(figsize=(12,6))
+
+    for model_type in model_types:
+        best_result = results[(model_type, 1, 1)]  # Ensure we use the stored best model for each type
+        forecast_horizon = 5 if model_type == "garch" else 5
+        forecast_method = "simulation" if model_type in ["egarch"] else "analytic"
+        forecast = best_result.forecast(horizon=forecast_horizon, method=forecast_method)
+        predicted_volatility = np.sqrt(forecast.variance.iloc[-1, :]) * np.sqrt(252)  # Annualized
+
+        plt.plot(range(1, len(predicted_volatility) + 1), predicted_volatility, marker='o', linestyle='-', label=f'{model_type.upper()} Predicted Volatility')
+
+    plt.title(f'{ticker} GARCH & EGARCH Volatility Forecast')
+    plt.xlabel('Days Ahead')
+    plt.ylabel('Volatility (%)')
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+
+    # Function to compute realized volatility
+def compute_realized_volatility(data, window=20, ticker="SPY"):
+
+    # Extract required columns
+    high, low, open_price, close = data[('High', ticker)], data[('Low', ticker)], data[('Open', ticker)], data[('Close', ticker)]
+
+    # Drop NaN values
+    data = data.dropna(subset=[('High', ticker), ('Low', ticker), ('Open', ticker), ('Close', ticker)])
+
+    # Log returns
+    log_hl = np.log(high / low)
+    log_co = np.log(close / open_price)
+    log_cc = np.log(close).diff()
+
+    # Compute volatility measures
+    close_to_close = log_cc.rolling(window).std() * np.sqrt(252)
+    garman_klass = np.sqrt(np.maximum((0.5 * log_hl**2 - (2 * np.log(2) - 1) * log_co**2).rolling(window).mean(), 0) * 252)
+    parkinson = np.sqrt(np.maximum((log_hl**2 / (4 * np.log(2))).rolling(window).mean(), 0) * 252)
+
+    k = 0.34 / (1.34 + (window + 1) / (window - 1))
+    yang_zhang = (k * log_co**2) + ((1 - k) * (log_hl**2 / 2)) + ((1 - k) * log_cc**2)
+    yang_zhang_vol = np.sqrt(np.maximum(yang_zhang.rolling(window).mean(), 0) * 252)
+
+    # Compile results into a DataFrame
+    return pd.DataFrame({
+        'Close-to-Close': close_to_close,
+        'Garman-Klass': garman_klass,
+        'Parkinson': parkinson,
+        'Yang-Zhang': yang_zhang_vol
+    }).dropna()
+
+# Fetch stock data
+latest_data = yf.download("SPY", start="2023-01-01", end=pd.Timestamp.today().strftime("%Y-%m-%d"))
+
+# Compute realized volatility
+realized_vol = compute_realized_volatility(latest_data)
+
+# Get the last 30 trading days
+realized_vol_last_30 = realized_vol.iloc[-30:]
+
+# Display the last 5 days
+display(realized_vol_last_30.iloc[-5:])
+
+# Plot realized volatility for the last 30 days
+plt.figure(figsize=(12, 6))
+for col, style in zip(realized_vol.columns, ['dashed', 'solid', 'dotted', 'solid']):
+    plt.plot(realized_vol_last_30.index, realized_vol_last_30[col], label=col, linestyle=style, marker='o')
+
+plt.title("SPY - Realized Volatility Estimates (Last 30 Trading Days)")
+plt.xlabel("Date")
+plt.ylabel("Volatility (%)")
+plt.legend()
+plt.grid()
+plt.xticks(rotation=45)
+plt.show()
+
+
+# Define adjustable lookback period
+lookback_period = 21  # Recommended for a 5-day forward forecast
+
+# Compute rolling historical volatilities over the lookback period
+realized_vol["Yang-Zhang"] = realized_vol["Yang-Zhang"].rolling(lookback_period).mean()
+realized_vol["Close-to-Close"] = realized_vol["Close-to-Close"].rolling(lookback_period).mean()
+realized_vol["Parkinson"] = realized_vol["Parkinson"].rolling(lookback_period).mean()
+realized_vol["Garman-Klass"] = realized_vol["Garman-Klass"].rolling(lookback_period).mean()
+
+# Get the most recent rolling average values
+smoothed_realized_vol = realized_vol.iloc[-1]  # Take last row after rolling mean
+
+# Identify the best model type (GARCH or EGARCH)
+best_model_name = best_result.model.volatility.__class__.__name__.lower()
+garch_label = "EGARCH (5-day Forecast)" if "egarch" in best_model_name else "GARCH (5-day Forecast)"
+
+# Forecast GARCH volatility for 5 days ahead
+forecast_horizon = 5
+forecast_method = "simulation" if "egarch" in best_model_name else "analytic"
+garch_forecast = best_result.forecast(horizon=forecast_horizon, method=forecast_method)
+
+# Extract 5-day variance forecast, sum variances, and convert to annualized volatility
+garch_forecasted_vol = np.sqrt(garch_forecast.variance.iloc[-1, :].sum() / forecast_horizon) * np.sqrt(252)
+
+# Updated Weights for Short-Term Forecast
+weights = {
+    "Yang-Zhang": 0.18,
+    "Close-to-Close": 0.18,
+    "Parkinson": 0.08,
+    "Garman-Klass": 0.16,
+    "GARCH": 0.40  # Increased weight since it's forward-looking
+}
+
+# Compute the weighted average of all volatility estimates including GARCH
+weighted_average_realized_vol = (
+    smoothed_realized_vol["Yang-Zhang"] * weights["Yang-Zhang"] +
+    smoothed_realized_vol["Close-to-Close"] * weights["Close-to-Close"] +
+    smoothed_realized_vol["Parkinson"] * weights["Parkinson"] +
+    smoothed_realized_vol["Garman-Klass"] * weights["Garman-Klass"] +
+    (garch_forecasted_vol / 100) * weights["GARCH"]
+)
+
+# Create a formatted DataFrame with all volatility estimates
+vol_table = pd.DataFrame({
+    "Volatility Estimator": [
+        f"Yang-Zhang ({lookback_period}-day Avg)", f"Close-to-Close ({lookback_period}-day Avg)", 
+        f"Parkinson ({lookback_period}-day Avg)", f"Garman-Klass ({lookback_period}-day Avg)", 
+        garch_label, "Weighted Average Volatility"
+    ],
+    "Estimated Volatility": [
+        smoothed_realized_vol["Yang-Zhang"],
+        smoothed_realized_vol["Close-to-Close"],
+        smoothed_realized_vol["Parkinson"],
+        smoothed_realized_vol["Garman-Klass"],
+        garch_forecasted_vol / 100,  # Convert to percentage
+        weighted_average_realized_vol
+    ]
+})
+
+# Print the volatility estimates table
+print("\nVolatility Estimates Comparison:")
+print(vol_table.to_string(index=False))
+
+
+# Get current stock price
+ticker = "SPY"
+stock = yf.Ticker(ticker)
+current_price = stock.history(period='1d')['Close'].iloc[-1]  # Get the last closing price
+
+# Get all available expiration dates
+expirations = stock.options
+
+# Filter only weekly expirations (Fridays)
+friday_expirations = [date for date in expirations if datetime.datetime.strptime(date, "%Y-%m-%d").weekday() == 4]
+
+if not friday_expirations:
+    print("No Friday expirations found.")
+else:
+    # Use the nearest Friday expiration
+    expiration_date = friday_expirations[0]
+    print(f"Nearest Friday Expiration: {expiration_date}")
+
+    # Get option chain for the selected expiration date
+    option_chain = stock.option_chain(expiration_date)
+
+    # Get Calls and Puts with IV
+    calls = option_chain.calls[['strike', 'lastPrice', 'impliedVolatility']]
+    puts = option_chain.puts[['strike', 'lastPrice', 'impliedVolatility']]
+
+    # Find the closest ATM strike price
+    atm_call = calls.iloc[(calls['strike'] - current_price).abs().argsort()[:1]]
+    atm_put = puts.iloc[(puts['strike'] - current_price).abs().argsort()[:1]]
+
+    # Extract IV values
+    call_iv = atm_call['impliedVolatility'].values[0]
+    put_iv = atm_put['impliedVolatility'].values[0]
+
+    # Calculate straddle IV
+    straddle_iv = (call_iv + put_iv) / 2
+
+    print(f"\nCurrent Stock Price: ${current_price:.2f}")
+    print("\nATM Call Option:\n", atm_call)
+    print("\nATM Put Option:\n", atm_put)
+    print(f"\n**Straddle Implied Volatility:** {straddle_iv:.4f}")
+
+
+
+# Define rolling windows for realized volatility (2-year volatility cone)
+windows = [30, 60, 90, 120]  # Includes 5-day for trading, longer for historical context
+quantiles = [0.25, 0.75]  # 25th and 75th percentile
+
+# Lists to store volatility metrics
+min_ = []
+max_ = []
+median = []
+top_q = []
+bottom_q = []
+realized = []
+
+# Function to calculate realized volatility
+def realized_vol(price_data, window=30):
+    log_return = np.log(price_data["Close"] / price_data["Close"].shift(1))
+    return log_return.rolling(window=window).std() * math.sqrt(252)  # Annualized RV
+
+# Download stock data
+ticker = "SPY"  # Change this to any stock/ETF you're analyzing
+start_date = "2023-01-30"  # 2-year historical window
+end_date = "2025-01-30"
+data = yf.download(ticker, start=start_date, end=end_date)
+
+# Compute realized volatility for different windows
+for window in windows:
+    estimator = realized_vol(data, window=window)
+    
+    # Append statistical metrics to lists
+    min_.append(estimator.min())
+    max_.append(estimator.max())
+    median.append(estimator.median())
+    top_q.append(estimator.quantile(quantiles[1]))
+    bottom_q.append(estimator.quantile(quantiles[0]))
+    realized.append(estimator.iloc[-1])  # Most recent realized volatility
+
+# GARCH Forecasting Function
+def garch_volatility(returns, p=1, q=1, forecast_days=5):
+    returns = returns * 100  # Scale returns for numerical stability
+    model = arch_model(returns, vol='Garch', p=p, q=q, rescale=False)  # Prevent automatic rescaling
+    result = model.fit(disp='off')
+    forecast = result.forecast(start=returns.index[-1], horizon=forecast_days)
+    return np.sqrt(forecast.variance.iloc[-1, -1]) * np.sqrt(252) / 100  # Rescale back
+
+# Calculate GARCH volatility (based on returns)
+data['Returns'] = np.log(data['Close'] / data['Close'].shift(1))
+garch_forecast = garch_volatility(data['Returns'].dropna())
+
+# Simulated Implied Volatility (Replace with real IV if available)
+implied_vol = 0.1526  # Example: 45% IV, replace this with actual IV data
+
+# Plot Volatility Cone
+plt.figure(figsize=(12, 6))
+
+# Plot historical volatility percentiles
+plt.plot(windows, min_, "-o", linewidth=1, label="Min")
+plt.plot(windows, max_, "-o", linewidth=1, label="Max")
+plt.plot(windows, median, "-o", linewidth=1, label="Median")
+plt.plot(windows, top_q, "-o", linewidth=1, label=f"{quantiles[1] * 100:.0f}th Percentile")
+plt.plot(windows, bottom_q, "-o", linewidth=1, label=f"{quantiles[0] * 100:.0f}th Percentile")
+
+# Plot realized and forecasted volatility
+plt.plot(windows, realized, "ro-.", linewidth=1, label="Recent Realized Volatility")
+plt.axhline(implied_vol, color='black', linestyle='--', label="Current Implied Volatility (IV)")
+plt.axhline(garch_forecast, color='purple', linestyle='--', label="GARCH Forecasted Volatility")
+
+# Formatting
+plt.xticks(windows)
+plt.xlabel("Rolling Window (Days)")
+plt.ylabel("Annualized Volatility")
+plt.title(f"{ticker} Volatility Cone (2-Year Historical Context)")
+plt.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=3)
+plt.grid()
+plt.show()
