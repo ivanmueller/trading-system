@@ -69,7 +69,7 @@ def compute_var(result, alpha=0.05):
 
 # Main execution
 if __name__ == "__main__":
-    ticker = "SPY"
+    ticker = "ENB"
     start_date = "2019-02-01"
     end_date = "2025-01-31"
     data = get_stock_data(ticker, start_date, end_date)
@@ -147,7 +147,7 @@ if __name__ == "__main__":
 
 
     # Function to compute realized volatility
-def compute_realized_volatility(data, window=20, ticker="SPY"):
+def compute_realized_volatility(data, window=20, ticker="ENB"):
 
     # Extract required columns
     high, low, open_price, close = data[('High', ticker)], data[('Low', ticker)], data[('Open', ticker)], data[('Close', ticker)]
@@ -178,7 +178,7 @@ def compute_realized_volatility(data, window=20, ticker="SPY"):
     }).dropna()
 
 # Fetch stock data
-latest_data = yf.download("SPY", start="2023-01-01", end=pd.Timestamp.today().strftime("%Y-%m-%d"))
+latest_data = yf.download("ENB", start="2023-01-01", end=pd.Timestamp.today().strftime("%Y-%m-%d"))
 
 # Compute realized volatility
 realized_vol = compute_realized_volatility(latest_data)
@@ -194,7 +194,7 @@ plt.figure(figsize=(12, 6))
 for col, style in zip(realized_vol.columns, ['dashed', 'solid', 'dotted', 'solid']):
     plt.plot(realized_vol_last_30.index, realized_vol_last_30[col], label=col, linestyle=style, marker='o')
 
-plt.title("SPY - Realized Volatility Estimates (Last 30 Trading Days)")
+plt.title("ENB - Realized Volatility Estimates (Last 30 Trading Days)")
 plt.xlabel("Date")
 plt.ylabel("Volatility (%)")
 plt.legend()
