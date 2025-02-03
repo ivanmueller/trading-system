@@ -147,7 +147,7 @@ if __name__ == "__main__":
 
 
     # Function to compute realized volatility
-def compute_realized_volatility(data, window=20, ticker="ENB"):
+def compute_realized_volatility(data, window=20, ticker="^VIX"):
 
     # Extract required columns
     high, low, open_price, close = data[('High', ticker)], data[('Low', ticker)], data[('Open', ticker)], data[('Close', ticker)]
@@ -178,7 +178,7 @@ def compute_realized_volatility(data, window=20, ticker="ENB"):
     }).dropna()
 
 # Fetch stock data
-latest_data = yf.download("ENB", start="2023-01-01", end=pd.Timestamp.today().strftime("%Y-%m-%d"))
+latest_data = yf.download("^VIX", start="2023-01-01", end=pd.Timestamp.today().strftime("%Y-%m-%d"))
 
 # Compute realized volatility
 realized_vol = compute_realized_volatility(latest_data)
@@ -194,7 +194,7 @@ plt.figure(figsize=(12, 6))
 for col, style in zip(realized_vol.columns, ['dashed', 'solid', 'dotted', 'solid']):
     plt.plot(realized_vol_last_30.index, realized_vol_last_30[col], label=col, linestyle=style, marker='o')
 
-plt.title("ENB - Realized Volatility Estimates (Last 30 Trading Days)")
+plt.title("VIX - Realized Volatility Estimates (Last 30 Trading Days)")
 plt.xlabel("Date")
 plt.ylabel("Volatility (%)")
 plt.legend()
@@ -382,3 +382,79 @@ plt.title(f"{ticker} Volatility Cone (2-Year Historical Context)")
 plt.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=3)
 plt.grid()
 plt.show()
+
+
+# Restrict to GARCH(1,1)
+model_types = ["garch"]
+garch_configs = [(1,1)]
+
+# Rolling forecast function
+def rolling_forecast_evaluation(returns, model_types, garch_configs, window_size=252, forecast_horizon=5):
+    n_obs = len(returns)
+    rolling_metrics = []
+    model_predictions = {}
+
+    for model_type in model_types:
+        for p, q in garch_configs:
+            predicted_vols = []
+            realized_vols = []
+            time_indices = []
+
+            print(f"Processing {model_type.upper()}({p},{q})...")
+
+            # Rolling forecast loop
+            for i in tqdm(range(window_size, n_obs - forecast_horizon)):
+                train_data = returns[i - window_size:i]
+
+                try:
+                    # Fit GARCH model with increased max iterations
+                    model = arch_model(train_data, vol="Garch", p=p, q=q, dist="t")
+                    result = model.fit(disp='off', options={'maxiter': 1000})
+
+                    # Forecast 5-day volatility
+                    forecast = result.forecast(horizon=forecast_horizon, method="analytic")
+                    predicted_variance = forecast.variance.iloc[-1, :].values
+                    realized_variance = (returns[i:i+forecast_horizon] ** 2).values
+
+                    if not np.isnan(predicted_variance.mean()) and not np.isnan(realized_variance.mean()):
+                        predicted_vols.append(predicted_variance.mean())
+                        realized_vols.append(realized_variance.mean())
+                        time_indices.append(returns.index[i])
+
+                except Exception as e:
+                    print(f"Error with {model_type}({p},{q}) at step {i}: {e}")
+                    continue
+
+            # Convert to numpy arrays and remove NaNs
+            predicted_vols = np.array(predicted_vols)
+            realized_vols = np.array(realized_vols)
+            valid_indices = ~np.isnan(predicted_vols) & ~np.isnan(realized_vols)
+
+            if np.sum(valid_indices) > 0:  # Ensure valid values exist
+                mse = mean_squared_error(realized_vols[valid_indices], predicted_vols[valid_indices])
+                rmse = np.sqrt(mse)
+                rolling_metrics.append([f'{model_type.upper()}({p},{q})', mse, rmse])
+                model_predictions[f'{model_type.upper()}({p},{q})'] = (time_indices, predicted_vols, realized_vols)
+
+    # Convert results to DataFrame
+    rolling_results_df = pd.DataFrame(rolling_metrics, columns=['Model', 'MSE', 'RMSE'])
+    display(rolling_results_df.sort_values(by=['MSE', 'RMSE']))
+
+    # Visualization: Plot predictions vs. realized variance for the best model
+    if not rolling_results_df.empty:
+        best_model_name = rolling_results_df.sort_values(by=['MSE', 'RMSE']).iloc[0]['Model']
+        if best_model_name in model_predictions:
+            time_indices, predicted_vols, realized_vols = model_predictions[best_model_name]
+
+            plt.figure(figsize=(12, 6))
+            plt.plot(time_indices, realized_vols, label="Realized 5-Day Variance", linestyle='-', color='black')
+            plt.plot(time_indices, predicted_vols, label=f"Predicted Volatility ({best_model_name})", linestyle='--', color='red')
+            plt.title(f"Predicted vs. Realized Volatility - {best_model_name}")
+            plt.xlabel("Date")
+            plt.ylabel("Variance")
+            plt.legend()
+            plt.grid()
+            plt.show()
+
+# Execute rolling forecast evaluation
+rolling_forecast_evaluation(returns, model_types, garch_configs)
