@@ -13,6 +13,14 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm  # For tracking progress
 from IPython.display import display  # Use Jupyter’s default method
 
+
+
+
+
+
+
+
+
 # Function to download stock data
 def get_stock_data(ticker, start_date, end_date):
     data = yf.download(ticker, start=start_date, end=end_date)
@@ -147,7 +155,7 @@ if __name__ == "__main__":
 
 
     # Function to compute realized volatility
-def compute_realized_volatility(data, window=20, ticker="^VIX"):
+def compute_realized_volatility(data, window=20, ticker="ENB"):
 
     # Extract required columns
     high, low, open_price, close = data[('High', ticker)], data[('Low', ticker)], data[('Open', ticker)], data[('Close', ticker)]
@@ -178,7 +186,7 @@ def compute_realized_volatility(data, window=20, ticker="^VIX"):
     }).dropna()
 
 # Fetch stock data
-latest_data = yf.download("^VIX", start="2023-01-01", end=pd.Timestamp.today().strftime("%Y-%m-%d"))
+latest_data = yf.download("ENB", start="2023-01-01", end=pd.Timestamp.today().strftime("%Y-%m-%d"))
 
 # Compute realized volatility
 realized_vol = compute_realized_volatility(latest_data)
@@ -194,13 +202,21 @@ plt.figure(figsize=(12, 6))
 for col, style in zip(realized_vol.columns, ['dashed', 'solid', 'dotted', 'solid']):
     plt.plot(realized_vol_last_30.index, realized_vol_last_30[col], label=col, linestyle=style, marker='o')
 
-plt.title("VIX - Realized Volatility Estimates (Last 30 Trading Days)")
+plt.title("ENB - Realized Volatility Estimates (Last 30 Trading Days)")
 plt.xlabel("Date")
 plt.ylabel("Volatility (%)")
 plt.legend()
 plt.grid()
 plt.xticks(rotation=45)
 plt.show()
+
+
+
+
+
+
+
+
 
 
 # Define adjustable lookback period
@@ -268,6 +284,15 @@ print(vol_table.to_string(index=False))
 
 
 
+
+
+
+
+
+
+
+
+
 # Get current stock price and options chain
 stock = yf.Ticker(ticker)
 current_price = stock.history(period='1d')['Close'].iloc[-1]  # Get the last closing price
@@ -307,6 +332,15 @@ else:
     print("\nATM Call Option:\n", atm_call)
     print("\nATM Put Option:\n", atm_put)
     print(f"\n**Straddle Implied Volatility:** {straddle_iv:.4f}")
+
+
+
+
+
+
+
+
+
 
 
 
@@ -384,77 +418,100 @@ plt.grid()
 plt.show()
 
 
-# Restrict to GARCH(1,1)
-model_types = ["garch"]
-garch_configs = [(1,1)]
 
-# Rolling forecast function
-def rolling_forecast_evaluation(returns, model_types, garch_configs, window_size=252, forecast_horizon=5):
-    n_obs = len(returns)
-    rolling_metrics = []
-    model_predictions = {}
 
-    for model_type in model_types:
-        for p, q in garch_configs:
-            predicted_vols = []
-            realized_vols = []
-            time_indices = []
 
-            print(f"Processing {model_type.upper()}({p},{q})...")
 
-            # Rolling forecast loop
-            for i in tqdm(range(window_size, n_obs - forecast_horizon)):
-                train_data = returns[i - window_size:i]
 
-                try:
-                    # Fit GARCH model with increased max iterations
-                    model = arch_model(train_data, vol="Garch", p=p, q=q, dist="t")
-                    result = model.fit(disp='off', options={'maxiter': 1000})
 
-                    # Forecast 5-day volatility
-                    forecast = result.forecast(horizon=forecast_horizon, method="analytic")
-                    predicted_variance = forecast.variance.iloc[-1, :].values
-                    realized_variance = (returns[i:i+forecast_horizon] ** 2).values
 
-                    if not np.isnan(predicted_variance.mean()) and not np.isnan(realized_variance.mean()):
-                        predicted_vols.append(predicted_variance.mean())
-                        realized_vols.append(realized_variance.mean())
-                        time_indices.append(returns.index[i])
 
-                except Exception as e:
-                    print(f"Error with {model_type}({p},{q}) at step {i}: {e}")
-                    continue
 
-            # Convert to numpy arrays and remove NaNs
-            predicted_vols = np.array(predicted_vols)
-            realized_vols = np.array(realized_vols)
-            valid_indices = ~np.isnan(predicted_vols) & ~np.isnan(realized_vols)
 
-            if np.sum(valid_indices) > 0:  # Ensure valid values exist
-                mse = mean_squared_error(realized_vols[valid_indices], predicted_vols[valid_indices])
-                rmse = np.sqrt(mse)
-                rolling_metrics.append([f'{model_type.upper()}({p},{q})', mse, rmse])
-                model_predictions[f'{model_type.upper()}({p},{q})'] = (time_indices, predicted_vols, realized_vols)
 
-    # Convert results to DataFrame
-    rolling_results_df = pd.DataFrame(rolling_metrics, columns=['Model', 'MSE', 'RMSE'])
-    display(rolling_results_df.sort_values(by=['MSE', 'RMSE']))
 
-    # Visualization: Plot predictions vs. realized variance for the best model
-    if not rolling_results_df.empty:
-        best_model_name = rolling_results_df.sort_values(by=['MSE', 'RMSE']).iloc[0]['Model']
-        if best_model_name in model_predictions:
-            time_indices, predicted_vols, realized_vols = model_predictions[best_model_name]
 
-            plt.figure(figsize=(12, 6))
-            plt.plot(time_indices, realized_vols, label="Realized 5-Day Variance", linestyle='-', color='black')
-            plt.plot(time_indices, predicted_vols, label=f"Predicted Volatility ({best_model_name})", linestyle='--', color='red')
-            plt.title(f"Predicted vs. Realized Volatility - {best_model_name}")
-            plt.xlabel("Date")
-            plt.ylabel("Variance")
-            plt.legend()
-            plt.grid()
-            plt.show()
 
-# Execute rolling forecast evaluation
-rolling_forecast_evaluation(returns, model_types, garch_configs)
+def get_sp500_tickers():
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    tables = pd.read_html(url)
+    return tables[0]['Symbol'].tolist()
+
+def compute_realized_volatility(data, window=20):
+    high, low = data['High'], data['Low']
+    open_price, close = data['Open'], data['Close']
+    log_hl = np.log(high / low)
+    log_co = np.log(close / open_price)
+    log_cc = np.log(close).diff()
+    close_to_close = log_cc.rolling(window).std() * np.sqrt(252)
+    garman_klass = np.sqrt((0.5 * log_hl**2 - (2 * np.log(2) - 1) * log_co**2).rolling(window).mean() * 252)
+    parkinson = np.sqrt((log_hl**2 / (4 * np.log(2))).rolling(window).mean() * 252)
+    k = 0.34 / (1.34 + (window + 1) / (window - 1))
+    yang_zhang = (k * log_co**2) + ((1 - k) * (log_hl**2 / 2)) + ((1 - k) * log_cc**2)
+    yang_zhang_vol = np.sqrt(yang_zhang.rolling(window).mean() * 252)
+    return pd.DataFrame({
+        'Close-to-Close': close_to_close,
+        'Garman-Klass': garman_klass,
+        'Parkinson': parkinson,
+        'Yang-Zhang': yang_zhang_vol
+    }).dropna()
+
+def fit_garch_model(returns):
+    model = arch_model(returns, vol="Garch", p=1, q=1)
+    result = model.fit(disp='off')
+    return result
+
+def get_garch_forecast(result, horizon=5):
+    forecast = result.forecast(horizon=horizon, method="analytic")
+    garch_forecasted_vol = np.sqrt(forecast.variance.iloc[-1, :].sum() / horizon) * np.sqrt(252)
+    return garch_forecasted_vol
+
+def screen_stocks(tickers, threshold= -0.05):
+    results = []
+    for ticker in tickers[:200]:
+        try:
+            stock = yf.Ticker(ticker)
+            data = stock.history(period="3mo")
+            if data.empty:
+                continue
+            
+            realized_vol = compute_realized_volatility(data)
+            smoothed_realized_vol = realized_vol.rolling(21).mean().iloc[-1]
+            returns = data['Close'].pct_change().dropna() * 100
+            garch_result = fit_garch_model(returns)
+            garch_forecasted_vol = get_garch_forecast(garch_result) / 100
+            
+            weights = {"Yang-Zhang": 0.18, "Close-to-Close": 0.18, "Parkinson": 0.08, "Garman-Klass": 0.16, "GARCH": 0.40}
+            weighted_average_realized_vol = sum(smoothed_realized_vol[col] * weights[col] for col in smoothed_realized_vol.index)
+            weighted_average_realized_vol += garch_forecasted_vol * weights["GARCH"]
+            
+            current_price = stock.history(period='1d')['Close'].iloc[-1]
+            expirations = stock.options
+            friday_expirations = [date for date in expirations if datetime.datetime.strptime(date, "%Y-%m-%d").weekday() == 4]
+            
+            if friday_expirations:
+                option_chain = stock.option_chain(friday_expirations[0])
+                calls = option_chain.calls[['strike', 'impliedVolatility']]
+                puts = option_chain.puts[['strike', 'impliedVolatility']]
+                atm_call = calls.iloc[(calls['strike'] - current_price).abs().argsort()[:1]]
+                atm_put = puts.iloc[(puts['strike'] - current_price).abs().argsort()[:1]]
+                straddle_iv = (atm_call['impliedVolatility'].values[0] + atm_put['impliedVolatility'].values[0]) / 2
+                iv_diff = straddle_iv - weighted_average_realized_vol
+                
+                if iv_diff < threshold:
+                    results.append({
+                        "Ticker": ticker,
+                        "Current Price": current_price,
+                        "Straddle IV": straddle_iv,
+                        "Weighted Forecast Vol": weighted_average_realized_vol,
+                        "IV Diff": iv_diff
+                    })
+        except Exception as e:
+            print(f"Skipping {ticker}: {e}")
+    
+    return pd.DataFrame(results)
+
+# Run Screener
+tickers = get_sp500_tickers()
+filtered_results = screen_stocks(tickers)
+display(filtered_results.sort_values(by='IV Diff', ascending=False))
