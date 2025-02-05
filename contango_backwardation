@@ -1,0 +1,43 @@
+# Function to get historical closing prices
+def get_vix_etn_data(tickers, start_date, end_date):
+    data = yf.download(tickers, start=start_date, end=end_date)['Close']
+    return data
+
+# Function to calculate contango/backwardation
+def calculate_term_structure(vxx, vxz):
+    """ 
+    Contango: UVIX is significantly higher than VXX (>5%) 
+    Backwardation: VXX is higher than UVIX (<-5%) 
+    """
+    term_structure = ((vxz - vxx) / vxx) * 100
+    return term_structure
+
+# Fetch VXX and UVIX data
+start_date = "2024-01-01"
+end_date = "2025-02-04"
+tickers = ["VXX", "VXZ"]
+
+data = get_vix_etn_data(tickers, start_date, end_date)
+
+# Calculate term structure percentage
+data["Term_Structure"] = calculate_term_structure(data["VXX"], data["VXZ"])
+
+# Identify contango (>5%) and backwardation (<-5%)
+data["Market_Structure"] = np.where(data["Term_Structure"] > 5, "Contango",
+                                    np.where(data["Term_Structure"] < -5, "Backwardation", "Neutral"))
+
+# Display results
+print(data.tail())  # Show last few rows
+
+# Plot the term structure over time
+plt.figure(figsize=(12,6))
+plt.plot(data.index, data["Term_Structure"], label="Term Structure (%)", color='b')
+plt.axhline(5, color='g', linestyle='--', label="Contango Threshold")
+plt.axhline(-5, color='r', linestyle='--', label="Backwardation Threshold")
+plt.axhline(0, color='black', linestyle='-', label="Neutral")
+plt.title("VXX & VXZ Term Structure")
+plt.xlabel("Date")
+plt.ylabel("Percentage Difference (%)")
+plt.legend()
+plt.grid()
+plt.show()
