@@ -1,43 +1,85 @@
-# Function to get historical closing prices
-def get_vix_etn_data(tickers, start_date, end_date):
-    data = yf.download(tickers, start=start_date, end=end_date)['Close']
-    return data
+# Define tickers and download OHLC data
+tickers = ["^VIN", "^VIF"]
+ohlc_data = yf.download(tickers, period="4y")[["Open", "High", "Low", "Close"]]  # Fetching OHLC data
 
-# Function to calculate contango/backwardation
-def calculate_term_structure(vxx, vxz):
-    """ 
-    Contango: UVIX is significantly higher than VXX (>5%) 
-    Backwardation: VXX is higher than UVIX (<-5%) 
-    """
-    term_structure = ((vxz - vxx) / vxx) * 100
-    return term_structure
+# Plot only the Close price
+plt.figure(figsize=(12, 6))
 
-# Fetch VXX and UVIX data
-start_date = "2024-01-01"
-end_date = "2025-02-04"
-tickers = ["VXX", "VXZ"]
+for ticker in tickers:
+    plt.plot(ohlc_data.index, ohlc_data["Close"][ticker], label=f"{ticker} Close")
 
-data = get_vix_etn_data(tickers, start_date, end_date)
+# Chart formatting
+plt.title("Close Prices of ^VIN and ^VIF Over the Past Year")
+plt.xlabel("Date")
+plt.ylabel("Close Price")
+plt.legend()
+plt.grid(True)
+plt.show()
 
-# Calculate term structure percentage
-data["Term_Structure"] = calculate_term_structure(data["VXX"], data["VXZ"])
 
-# Identify contango (>5%) and backwardation (<-5%)
-data["Market_Structure"] = np.where(data["Term_Structure"] > 5, "Contango",
-                                    np.where(data["Term_Structure"] < -5, "Backwardation", "Neutral"))
+
+
+
+
+# Define tickers and download Close price data
+tickers = ["^VIF", "^VIN"]
+data = yf.download(tickers, period="4y")["Close"]
+
+# Compute contango spread (VIF - VIN)
+data["Contango Spread"] = data["^VIF"] - data["^VIN"]
+
+# Filter for only contango days (when VIF > VIN)
+contango_days = data[data["Contango Spread"] > 0]
+
+# Compute the average contango difference
+average_contango = contango_days["Contango Spread"].mean()
 
 # Display results
-print(data.tail())  # Show last few rows
+print(f"Average Contango Difference (VIF - VIN) over the past year: {average_contango:.2f}")
 
-# Plot the term structure over time
-plt.figure(figsize=(12,6))
-plt.plot(data.index, data["Term_Structure"], label="Term Structure (%)", color='b')
-plt.axhline(5, color='g', linestyle='--', label="Contango Threshold")
-plt.axhline(-5, color='r', linestyle='--', label="Backwardation Threshold")
-plt.axhline(0, color='black', linestyle='-', label="Neutral")
-plt.title("VXX & VXZ Term Structure")
-plt.xlabel("Date")
-plt.ylabel("Percentage Difference (%)")
-plt.legend()
-plt.grid()
-plt.show()
+
+
+
+
+
+
+
+import yfinance as yf
+import pandas as pd
+
+# Define tickers and download Close price data
+tickers = ["^VIF", "^VIN"]
+data = yf.download(tickers, period="4y")["Close"]
+
+# Compute contango condition (True = Contango, False = Backwardation)
+data["Contango"] = data["^VIF"] > data["^VIN"]
+
+# Identify contango streaks
+contango_streaks = []
+current_streak = 0
+
+for is_contango in data["Contango"]:
+    if is_contango:
+        current_streak += 1  # Increase streak if contango continues
+    else:
+        if current_streak > 0:
+            contango_streaks.append(current_streak)  # Save completed streak
+        current_streak = 0  # Reset streak
+
+# Include the last streak if the period ended in contango
+if current_streak > 0:
+    contango_streaks.append(current_streak)
+
+# Compute the average contango streak length
+average_contango_duration = sum(contango_streaks) / len(contango_streaks) if contango_streaks else 0
+
+# Display results
+print(f"Average Contango Duration before Backwardation: {average_contango_duration:.2f} days")
+
+
+
+
+
+
+
+
